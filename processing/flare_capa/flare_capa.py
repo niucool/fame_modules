@@ -1,5 +1,7 @@
 from fame.core.module import ProcessingModule
 from fame.common.exceptions import ModuleInitializationError, ModuleExecutionError
+import traceback
+import pathlib
 
 try:
     import capa.main
@@ -46,7 +48,7 @@ class FlareCapa(ProcessingModule):
         matched_bbs = set()
         for rule_name, matches in capabilities.items():
             rule = rules[rule_name]
-            if rule.meta.get("scope") == capa.rules.BASIC_BLOCK_SCOPE:
+            if capa.rules.Scope.BASIC_BLOCK in rule.scopes:
                 for (addr, match) in matches:
                     assert addr in functions_by_bb
                     matched_bbs.add(addr)
@@ -67,19 +69,24 @@ class FlareCapa(ProcessingModule):
 
     def each(self, target):
         self.results = {}
+        rules_path = pathlib.Path(self.rules)
+        target_path = pathlib.Path(target)
 
         try:
-            rules = capa.main.get_rules([self.rules])
-            extractor = capa.main.get_extractor(target, "auto", "auto", capa.main.BACKEND_VIV, [], False, disable_progress=True)
-            capabilities, counts = capa.main.find_capabilities(rules, extractor, disable_progress=True)
+            rules = capa.rules.get_rules([rules_path])
+            extractor = capa.loader.get_extractor(target_path, "auto", "auto", capa.main.BACKEND_VIV, [], False, disable_progress=True)
+            capabilities = capa.capabilities.common.find_capabilities(rules, extractor, disable_progress=True)
         except Exception as error:
+            traceback.print_exc()
             raise ModuleExecutionError('Could not run capa on target with error: ' + str(error))
 
-        meta = capa.main.collect_metadata([], target, "auto", "auto",  self.rules, extractor)
-        meta['analysis'].update(counts)
-        meta["analysis"]["layout"] = self.compute_layout(rules, extractor, capabilities)
+        meta = capa.loader.collect_metadata([], target_path, "auto", "auto",  [rules_path], extractor, capabilities)
+        # meta['analysis'].update(capabilities.feature_counts)
+        # meta["analysis"]["layout"] = self.compute_layout(rules, extractor, capabilities)
+        # meta.analysis.layout = capa.loader.compute_layout(rules, extractor, capabilities.matches)
+        meta.analysis.layout = self.compute_layout(rules, extractor, capabilities.matches)
 
-        doc = rd.ResultDocument.from_capa(meta, rules, capabilities)
+        doc = rd.ResultDocument.from_capa(meta, rules, capabilities.matches)
 
         # extract all MBS behaviors
         # taken from https://github.com/mandiant/capa/blob/master/scripts/capa_as_library.py
